@@ -1,0 +1,20 @@
+# Compiled binary
+zed-openai-api
+
+# Deno
+deno.lock
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Coverage
+/coverage
