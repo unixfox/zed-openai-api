@@ -141,6 +141,24 @@ Models that support vision accept images via `image_url` content parts:
 
 Supported formats: JPEG, PNG, GIF, WebP. Both HTTP URLs and base64 data URIs work.
 
+### `POST /v1/messages`
+
+Anthropic Messages API compatible endpoint. Supports streaming and non-streaming.
+
+```bash
+curl http://localhost:8080/v1/messages \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_tokens": 1024,
+    "stream": true
+  }'
+```
+
+Streaming responses use Anthropic's SSE format (`event:` + `data:` lines). For Claude models, requests are passed through natively. Non-Claude models are automatically converted.
+
 ## Environment variables
 
 | Variable | Required | Default | Description |
@@ -197,8 +215,11 @@ src/
     runtime.ts          Runtime state management
     mod.ts              Re-exports
   openai/
-    convert.ts          Request format conversion
-    stream.ts           NDJSON to SSE stream conversion
+    convert.ts          OpenAI request format conversion
+    stream.ts           NDJSON to OpenAI SSE conversion
+    mod.ts              Re-exports
+  anthropic/
+    stream.ts           NDJSON to Anthropic SSE conversion
     mod.ts              Re-exports
 ```
 

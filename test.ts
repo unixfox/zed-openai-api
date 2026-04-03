@@ -347,6 +347,70 @@ Deno.test("integration: full round-trip with auth and healthcheck", async () => 
 
     console.log(`  Streaming response: "${fullResponse.trim()}"`);
     assertEquals(fullResponse.length > 0, true);
+    // 6. Anthropic Messages API (streaming)
+    const msgRes = await fetch(
+      `http://localhost:${port}/v1/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5",
+          messages: [{
+            role: "user",
+            content: "Say 'anthropic ok' and nothing else.",
+          }],
+          max_tokens: 50,
+          stream: true,
+        }),
+      },
+    );
+
+    assertEquals(msgRes.ok, true, `Messages endpoint failed: ${msgRes.status}`);
+    assertEquals(
+      msgRes.headers.get("content-type")?.includes("text/event-stream"),
+      true,
+    );
+
+    const msgReader = msgRes.body!.getReader();
+    let msgBuffer = "";
+    let msgText = "";
+    let sawMessageStart = false;
+    let sawMessageStop = false;
+
+    while (true) {
+      const { done, value } = await msgReader.read();
+      if (done) break;
+      msgBuffer += decoder.decode(value, { stream: true });
+
+      while (msgBuffer.includes("\n")) {
+        const idx = msgBuffer.indexOf("\n");
+        const line = msgBuffer.slice(0, idx).trim();
+        msgBuffer = msgBuffer.slice(idx + 1);
+
+        if (line.startsWith("event: ")) {
+          const eventType = line.slice(7);
+          if (eventType === "message_start") sawMessageStart = true;
+          if (eventType === "message_stop") sawMessageStop = true;
+        }
+        if (line.startsWith("data: ")) {
+          const data = JSON.parse(line.slice(6));
+          if (
+            data.type === "content_block_delta" &&
+            data.delta?.type === "text_delta"
+          ) {
+            msgText += data.delta.text;
+          }
+        }
+      }
+    }
+
+    console.log(`  /v1/messages streaming: "${msgText.trim()}"`);
+    assertEquals(msgText.length > 0, true, "Expected non-empty Anthropic response");
+    assertEquals(sawMessageStart, true, "Expected message_start event");
+    assertEquals(sawMessageStop, true, "Expected message_stop event");
   } finally {
     server.kill("SIGTERM");
     await server.stdout.cancel();

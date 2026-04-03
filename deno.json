@@ -6,6 +6,7 @@
     "@std/assert": "jsr:@std/assert@1",
     "@lib/zed": "./src/zed/mod.ts",
     "@lib/openai": "./src/openai/mod.ts",
+    "@lib/anthropic": "./src/anthropic/mod.ts",
     "@lib/server": "./src/server.ts"
   },
   "tasks": {

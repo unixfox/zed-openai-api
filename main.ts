@@ -7,6 +7,7 @@ import {
   authenticate,
   handleChatCompletions,
   handleHealthCheck,
+  handleMessages,
   handleModels,
 } from "@lib/server";
 
@@ -60,6 +61,9 @@ async function handler(req: Request): Promise<Response> {
     }
     if (path === "/v1/chat/completions" && req.method === "POST") {
       return await handleChatCompletions(req, runtime);
+    }
+    if (path === "/v1/messages" && req.method === "POST") {
+      return await handleMessages(req, runtime);
     }
     if (path === "/") {
       return Response.json({ status: "ok", models: runtime.models.size });
