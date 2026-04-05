@@ -587,6 +587,29 @@ async function collectNonStreamingResponse(
       else if (sr === "max_tokens") stopReason = "length";
       else if (sr === "end_turn") stopReason = "stop";
     }
+    // Google Gemini events
+    else if (Array.isArray(event.candidates)) {
+      const candidates = event.candidates as Record<string, unknown>[];
+      const candidate = candidates[0];
+      const content = candidate?.content as Record<string, unknown> | undefined;
+      const parts = content?.parts as Record<string, unknown>[] | undefined;
+      if (parts) {
+        for (const part of parts) {
+          if (part.text) fullText += part.text as string;
+        }
+      }
+      if (candidate?.finishReason === "MAX_TOKENS") stopReason = "length";
+    }
+    // Chat Completions chunk format (xAI)
+    else if (Array.isArray(event.choices)) {
+      const choices = event.choices as Record<string, unknown>[];
+      const choice = choices[0];
+      if (choice) {
+        const delta = choice.delta as Record<string, unknown> | undefined;
+        if (delta?.content) fullText += delta.content as string;
+        if (choice.finish_reason) stopReason = choice.finish_reason as string;
+      }
+    }
   }
 
   const message: Record<string, unknown> = {

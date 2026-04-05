@@ -277,9 +277,173 @@ function chatToAnthropicRequest(
   return result;
 }
 
+// --- Google Gemini format ---
+
+function chatToGeminiRequest(
+  req: OpenAIChatRequest,
+): Record<string, unknown> {
+  const contents: Record<string, unknown>[] = [];
+  let systemInstruction: Record<string, unknown> | undefined;
+
+  for (const msg of req.messages) {
+    if (msg.role === "system" || msg.role === "developer") {
+      systemInstruction = {
+        parts: [{ text: contentToString(msg.content) }],
+      };
+      continue;
+    }
+
+    const role = msg.role === "assistant" ? "model" : "user";
+    const parts: Record<string, unknown>[] = [];
+
+    if (msg.role === "assistant" && msg.tool_calls) {
+      const text = contentToString(msg.content);
+      if (text) parts.push({ text });
+      for (const tc of msg.tool_calls) {
+        parts.push({
+          functionCall: {
+            name: tc.function.name,
+            args: jsonParse(tc.function.arguments) || {},
+          },
+        });
+      }
+    } else if (msg.role === "tool") {
+      parts.push({
+        functionResponse: {
+          name: "tool",
+          response: { result: contentToString(msg.content) },
+        },
+      });
+    } else {
+      const content = msg.content;
+      if (typeof content === "string") {
+        parts.push({ text: content });
+      } else if (Array.isArray(content)) {
+        for (const part of content) {
+          if (part.type === "text" && part.text) {
+            parts.push({ text: part.text });
+          } else if (part.type === "image_url" && part.image_url?.url) {
+            const url = part.image_url.url;
+            const match = url.match(/^data:([\w/+-]+);base64,(.+)$/);
+            if (match) {
+              parts.push({
+                inlineData: { mimeType: match[1], data: match[2] },
+              });
+            }
+          }
+        }
+      }
+    }
+
+    if (parts.length > 0) {
+      contents.push({ role, parts });
+    }
+  }
+
+  const result: Record<string, unknown> = { contents };
+  if (systemInstruction) result.systemInstruction = systemInstruction;
+
+  const generationConfig: Record<string, unknown> = {};
+  if (req.temperature !== undefined) {
+    generationConfig.temperature = req.temperature;
+  }
+  if (req.top_p !== undefined) generationConfig.topP = req.top_p;
+  if (req.max_tokens || req.max_completion_tokens) {
+    generationConfig.maxOutputTokens = req.max_completion_tokens ||
+      req.max_tokens;
+  }
+  if (req.stop) {
+    generationConfig.stopSequences = Array.isArray(req.stop)
+      ? req.stop
+      : [req.stop];
+  }
+  if (Object.keys(generationConfig).length > 0) {
+    result.generationConfig = generationConfig;
+  }
+
+  if (req.tools?.length) {
+    result.tools = [{
+      functionDeclarations: req.tools.map((t) => ({
+        name: t.function.name,
+        description: t.function.description || "",
+        parameters: t.function.parameters || {},
+      })),
+    }];
+  }
+
+  return result;
+}
+
+// --- Chat Completions format (for xAI and other OpenAI-chat-compatible providers) ---
+
+function chatToChatCompletionsRequest(
+  req: OpenAIChatRequest,
+): Record<string, unknown> {
+  const messages: Record<string, unknown>[] = [];
+
+  for (const msg of req.messages) {
+    const role = msg.role === "developer" ? "system" : msg.role;
+
+    if (msg.role === "assistant" && msg.tool_calls) {
+      messages.push({
+        role: "assistant",
+        content: contentToString(msg.content) || null,
+        tool_calls: msg.tool_calls.map((tc) => ({
+          id: tc.id,
+          type: tc.type,
+          function: { name: tc.function.name, arguments: tc.function.arguments },
+        })),
+      });
+      continue;
+    }
+
+    if (msg.role === "tool") {
+      messages.push({
+        role: "tool",
+        tool_call_id: msg.tool_call_id,
+        content: contentToString(msg.content),
+      });
+      continue;
+    }
+
+    messages.push({ role, content: msg.content });
+  }
+
+  const result: Record<string, unknown> = {
+    model: req.model,
+    messages,
+    stream: req.stream !== false,
+  };
+
+  // xAI requires temperature to be present
+  result.temperature = req.temperature ?? 1;
+  if (req.top_p !== undefined) result.top_p = req.top_p;
+  if (req.max_tokens || req.max_completion_tokens) {
+    result.max_tokens = req.max_completion_tokens || req.max_tokens;
+  }
+  if (req.stop) result.stop = req.stop;
+
+  if (req.tools?.length) {
+    result.tools = req.tools.map((t) => ({
+      type: "function",
+      function: {
+        name: t.function.name,
+        description: t.function.description,
+        parameters: t.function.parameters,
+      },
+    }));
+    if (req.tool_choice) result.tool_choice = req.tool_choice;
+  }
+
+  return result;
+}
+
 // --- Build provider request ---
 
-function clampMaxTokens(req: OpenAIChatRequest, model: ZedModel): OpenAIChatRequest {
+function clampMaxTokens(
+  req: OpenAIChatRequest,
+  model: ZedModel,
+): OpenAIChatRequest {
   const requested = req.max_completion_tokens || req.max_tokens;
   const limit = model.max_output_tokens;
   if (limit && requested && requested > limit) {
@@ -294,5 +458,8 @@ export function buildProviderRequest(
 ): Record<string, unknown> {
   const clamped = clampMaxTokens(req, model);
   if (model.provider === "anthropic") return chatToAnthropicRequest(clamped);
+  if (model.provider === "google") return chatToGeminiRequest(clamped);
+  if (model.provider === "x_ai") return chatToChatCompletionsRequest(clamped);
+  // Default: OpenAI Responses API
   return chatToResponsesApiRequest(clamped);
 }

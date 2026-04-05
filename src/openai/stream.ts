@@ -147,6 +147,79 @@ function convertAnthropicEvent(
   return chunks;
 }
 
+// --- Google Gemini events ---
+
+function convertGeminiEvent(
+  event: Record<string, unknown>,
+  state: StreamState,
+): string[] {
+  const chunks: string[] = [];
+  const candidates = event.candidates as Record<string, unknown>[] | undefined;
+  if (!candidates?.length) return [];
+
+  const candidate = candidates[0];
+  const content = candidate.content as Record<string, unknown> | undefined;
+  const parts = content?.parts as Record<string, unknown>[] | undefined;
+  const finishReason = candidate.finishReason as string | undefined;
+
+  if (parts) {
+    for (const part of parts) {
+      if (part.text) {
+        chunks.push(makeChunk(state, { content: part.text as string }));
+      }
+      if (part.functionCall) {
+        const fc = part.functionCall as Record<string, unknown>;
+        const idx = state.currentToolIndex++;
+        chunks.push(
+          makeChunk(state, {
+            tool_calls: [{
+              index: idx,
+              id: `call_${crypto.randomUUID().slice(0, 8)}`,
+              type: "function",
+              function: {
+                name: fc.name as string,
+                arguments: JSON.stringify(fc.args || {}),
+              },
+            }],
+          }),
+        );
+      }
+    }
+  }
+
+  if (finishReason === "STOP") {
+    chunks.push(makeChunk(state, {}, "stop"));
+  } else if (finishReason === "MAX_TOKENS") {
+    chunks.push(makeChunk(state, {}, "length"));
+  }
+
+  return chunks;
+}
+
+// --- Chat Completions chunk events (xAI) ---
+
+function convertChatCompletionsEvent(
+  event: Record<string, unknown>,
+  state: StreamState,
+): string[] {
+  // Already in OpenAI Chat Completions format — re-wrap with our ID
+  const choices = event.choices as Record<string, unknown>[];
+  if (!choices || choices.length === 0) return [];
+
+  const choice = choices[0];
+  const delta = choice.delta as Record<string, unknown> | undefined;
+  const finishReason = (choice.finish_reason as string) || null;
+
+  if (!delta && !finishReason) return [];
+
+  const newDelta: Record<string, unknown> = {};
+  if (delta?.role) newDelta.role = delta.role;
+  if (delta?.content) newDelta.content = delta.content;
+  if (delta?.tool_calls) newDelta.tool_calls = delta.tool_calls;
+
+  return [makeChunk(state, newDelta, finishReason)];
+}
+
 // --- Public API ---
 
 export function createStreamConverter(
@@ -180,13 +253,25 @@ export function createStreamConverter(
 
     if (!event) return [];
 
-    // Route based on event type
+    // Route based on event format
     const type = event.type as string;
+
+    // OpenAI Responses API events (have a "type" field starting with "response.")
     if (type?.startsWith("response.")) {
       return convertOpenAiResponseEvent(event, state);
     }
 
-    // Anthropic events
+    // Google Gemini events (have "candidates" array)
+    if (Array.isArray(event.candidates)) {
+      return convertGeminiEvent(event, state);
+    }
+
+    // Chat Completions chunk format (xAI — have "choices" array, no "type")
+    if (Array.isArray(event.choices)) {
+      return convertChatCompletionsEvent(event, state);
+    }
+
+    // Anthropic events (message_start, content_block_*, message_delta, etc.)
     if (provider === "anthropic" && !sentRole && type !== "message_start") {
       sentRole = true;
       return [
