@@ -178,11 +178,13 @@ function formatResponsesContent(
 function toAnthropicContent(
   content: string | ContentPart[] | undefined,
 ): { type: string; [k: string]: unknown }[] {
-  if (!content) return [{ type: "text", text: "" }];
-  if (typeof content === "string") return [{ type: "text", text: content }];
+  if (!content) return [];
+  if (typeof content === "string") {
+    return content.trim() ? [{ type: "text", text: content }] : [];
+  }
   const blocks: { type: string; [k: string]: unknown }[] = [];
   for (const part of content) {
-    if (part.type === "text" && part.text) {
+    if (part.type === "text" && part.text?.trim()) {
       blocks.push({ type: "text", text: part.text });
     } else if (part.type === "image_url" && part.image_url?.url) {
       const url = part.image_url.url;
@@ -197,7 +199,7 @@ function toAnthropicContent(
       }
     }
   }
-  return blocks.length > 0 ? blocks : [{ type: "text", text: "" }];
+  return blocks;
 }
 
 function chatToAnthropicRequest(
@@ -223,7 +225,7 @@ function chatToAnthropicRequest(
           });
         }
       }
-      messages.push({ role: "assistant", content });
+      if (content.length > 0) messages.push({ role: "assistant", content });
       continue;
     }
     if (msg.role === "tool") {

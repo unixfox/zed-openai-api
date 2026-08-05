@@ -235,6 +235,23 @@ export function createStreamConverter(
   };
   let sentRole = false;
 
+  function withRole(chunks: string[]): string[] {
+    if (chunks.length === 0 || sentRole) return chunks;
+    sentRole = true;
+    const first = jsonParse(chunks[0]);
+    const firstChoices = first?.choices as
+      | Record<string, unknown>[]
+      | undefined;
+    const firstDelta = firstChoices?.[0]?.delta as
+      | Record<string, unknown>
+      | undefined;
+    if (firstDelta?.role === "assistant") return chunks;
+    return [
+      makeChunk(state, { role: "assistant", content: "" }),
+      ...chunks,
+    ];
+  }
+
   return (line: string): string[] => {
     const trimmed = line.trim();
     if (!trimmed) return [];
@@ -256,30 +273,36 @@ export function createStreamConverter(
     // Route based on event format
     const type = event.type as string;
 
-    // OpenAI Responses API events (have a "type" field starting with "response.")
+    // OpenAI Responses API (have a "type" field starting with "response.")
     if (type?.startsWith("response.")) {
-      return convertOpenAiResponseEvent(event, state);
+      return withRole(convertOpenAiResponseEvent(event, state));
     }
 
     // Google Gemini events (have "candidates" array)
     if (Array.isArray(event.candidates)) {
-      return convertGeminiEvent(event, state);
+      return withRole(convertGeminiEvent(event, state));
     }
 
     // Chat Completions chunk format (xAI — have "choices" array, no "type")
     if (Array.isArray(event.choices)) {
-      return convertChatCompletionsEvent(event, state);
+      return withRole(convertChatCompletionsEvent(event, state));
     }
 
     // Anthropic events (message_start, content_block_*, message_delta, etc.)
-    if (provider === "anthropic" && !sentRole && type !== "message_start") {
+    if (
+      provider === "anthropic" &&
+      !sentRole &&
+      type !== "message_start"
+    ) {
       sentRole = true;
       return [
         makeChunk(state, { role: "assistant", content: "" }),
         ...convertAnthropicEvent(event, state),
       ];
     }
-    if (type === "message_start") sentRole = true;
+    if (type === "message_start" || type === "content_block_start") {
+      sentRole = true;
+    }
     return convertAnthropicEvent(event, state);
   };
 }
