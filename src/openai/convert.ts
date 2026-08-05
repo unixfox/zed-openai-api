@@ -231,6 +231,7 @@ function chatToAnthropicRequest(
         type: "tool_result",
         tool_use_id: msg.tool_call_id,
         content: contentToString(msg.content),
+        is_error: false,
       };
       const last = messages[messages.length - 1];
       if (last?.role === "user" && Array.isArray(last.content)) {

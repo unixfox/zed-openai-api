@@ -240,9 +240,7 @@ function buildAnthropicProviderRequest(
       | undefined;
     const normalizedMessages = messages?.map((m) => ({
       ...m,
-      content: typeof m.content === "string"
-        ? [{ type: "text", text: m.content }]
-        : m.content,
+      content: normalizeAnthropicMessageContent(m.content),
     }));
     return {
       ...body,
@@ -326,6 +324,22 @@ function anthropicToOpenAIChatRequest(
   }
 
   return result;
+}
+
+function normalizeAnthropicMessageContent(
+  content: unknown,
+): unknown {
+  if (typeof content === "string") {
+    return content.trim() ? [{ type: "text", text: content }] : [];
+  }
+  if (!Array.isArray(content)) return content;
+  return content.map((block) => {
+    const b = block as Record<string, unknown>;
+    if (b?.type === "tool_result") {
+      return { ...b, is_error: b.is_error === true };
+    }
+    return b;
+  });
 }
 
 function contentToString(content: unknown): string {
