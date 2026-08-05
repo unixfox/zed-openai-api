@@ -253,7 +253,9 @@ function buildAnthropicProviderRequest(
 
   // For non-Anthropic models, convert Anthropic messages to OpenAI Responses API
   return buildProviderRequest(
-    anthropicToOpenAIChatRequest(body, model.id) as Parameters<typeof buildProviderRequest>[0],
+    anthropicToOpenAIChatRequest(body, model.id) as Parameters<
+      typeof buildProviderRequest
+    >[0],
     model,
   );
 }
@@ -269,7 +271,14 @@ function anthropicToOpenAIChatRequest(
   temperature?: number;
   top_p?: number;
   stop?: string[];
-  tools?: { type: string; function: { name: string; description?: string; parameters?: Record<string, unknown> } }[];
+  tools?: {
+    type: string;
+    function: {
+      name: string;
+      description?: string;
+      parameters?: Record<string, unknown>;
+    };
+  }[];
 } {
   const messages: { role: string; content: unknown }[] = [];
 
@@ -310,7 +319,11 @@ function anthropicToOpenAIChatRequest(
 
   // Convert tools
   const tools = body.tools as
-    | { name: string; description?: string; input_schema?: Record<string, unknown> }[]
+    | {
+      name: string;
+      description?: string;
+      input_schema?: Record<string, unknown>;
+    }[]
     | undefined;
   if (tools?.length) {
     result.tools = tools.map((t) => ({
@@ -394,8 +407,8 @@ async function collectAnthropicNonStreamingResponse(
       const delta = event.delta as Record<string, unknown>;
       if (delta?.type === "text_delta") fullText += delta.text as string;
       else if (delta?.type === "input_json_delta" && toolCalls.length > 0) {
-        toolCalls[toolCalls.length - 1].arguments +=
-          delta.partial_json as string;
+        toolCalls[toolCalls.length - 1].arguments += delta
+          .partial_json as string;
       }
     } else if (type === "content_block_start") {
       const block = event.content_block as Record<string, unknown>;
@@ -415,8 +428,7 @@ async function collectAnthropicNonStreamingResponse(
       stopReason = (delta?.stop_reason as string) || "end_turn";
       const usage = event.usage as Record<string, number> | undefined;
       if (usage) outputTokens = usage.output_tokens || 0;
-    }
-    // OpenAI Responses API events
+    } // OpenAI Responses API events
     else if (type === "response.output_text.delta") {
       fullText += event.delta as string;
     } else if (type === "response.output_item.added") {
@@ -600,8 +612,7 @@ async function collectNonStreamingResponse(
       if (sr === "tool_use") stopReason = "tool_calls";
       else if (sr === "max_tokens") stopReason = "length";
       else if (sr === "end_turn") stopReason = "stop";
-    }
-    // Google Gemini events
+    } // Google Gemini events
     else if (Array.isArray(event.candidates)) {
       const candidates = event.candidates as Record<string, unknown>[];
       const candidate = candidates[0];
@@ -613,8 +624,7 @@ async function collectNonStreamingResponse(
         }
       }
       if (candidate?.finishReason === "MAX_TOKENS") stopReason = "length";
-    }
-    // Chat Completions chunk format (xAI)
+    } // Chat Completions chunk format (xAI)
     else if (Array.isArray(event.choices)) {
       const choices = event.choices as Record<string, unknown>[];
       const choice = choices[0];

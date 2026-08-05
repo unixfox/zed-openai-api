@@ -1,8 +1,4 @@
-import {
-  createRuntime,
-  initRuntime,
-  type RuntimeState,
-} from "@lib/zed";
+import { createRuntime, initRuntime, type RuntimeState } from "@lib/zed";
 import {
   authenticate,
   handleChatCompletions,

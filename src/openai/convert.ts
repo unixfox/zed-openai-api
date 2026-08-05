@@ -394,7 +394,10 @@ function chatToChatCompletionsRequest(
         tool_calls: msg.tool_calls.map((tc) => ({
           id: tc.id,
           type: tc.type,
-          function: { name: tc.function.name, arguments: tc.function.arguments },
+          function: {
+            name: tc.function.name,
+            arguments: tc.function.arguments,
+          },
         })),
       });
       continue;

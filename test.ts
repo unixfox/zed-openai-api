@@ -8,10 +8,7 @@ import {
   readLocalZedCredentials,
   sendCompletion,
 } from "@lib/zed";
-import {
-  buildProviderRequest,
-  chatToResponsesApiRequest,
-} from "@lib/openai";
+import { buildProviderRequest, chatToResponsesApiRequest } from "@lib/openai";
 import { createStreamConverter } from "@lib/openai";
 
 // --- Unit tests for conversion ---
@@ -408,7 +405,11 @@ Deno.test("integration: full round-trip with auth and healthcheck", async () => 
     }
 
     console.log(`  /v1/messages streaming: "${msgText.trim()}"`);
-    assertEquals(msgText.length > 0, true, "Expected non-empty Anthropic response");
+    assertEquals(
+      msgText.length > 0,
+      true,
+      "Expected non-empty Anthropic response",
+    );
     assertEquals(sawMessageStart, true, "Expected message_start event");
     assertEquals(sawMessageStop, true, "Expected message_stop event");
   } finally {
