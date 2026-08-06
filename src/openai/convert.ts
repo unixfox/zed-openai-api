@@ -398,8 +398,6 @@ const GEMINI_SCHEMA_KEYWORDS = new Set([
   "pattern",
   "minimum",
   "maximum",
-  "exclusiveMinimum",
-  "exclusiveMaximum",
   "default",
   "oneOf",
   "anyOf",
@@ -415,10 +413,25 @@ function sanitizeGeminiSchema(
 
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (key === "type" && Array.isArray(value)) {
+      // e.g. ["string", "null"] → { type: "string", nullable: true }
+      const types = value.filter((t) => typeof t === "string");
+      const hasNull = types.includes("null");
+      const nonNull = types.filter((t) => t !== "null");
+      if (nonNull.length === 1) {
+        result.type = nonNull[0];
+        if (hasNull) result.nullable = true;
+      } else if (nonNull.length > 1) {
+        result.oneOf = nonNull.map((t) => ({ type: t }));
+      }
+      continue;
+    }
+
     if (!GEMINI_SCHEMA_KEYWORDS.has(key)) {
       if (
         key === "$schema" || key === "$id" || key === "const" ||
         key === "enumTitles" || key === "patternProperties" ||
+        key === "exclusiveMinimum" || key === "exclusiveMaximum" ||
         key.startsWith("$")
       ) {
         continue;
@@ -450,7 +463,7 @@ function sanitizeGeminiSchema(
     }
   }
 
-  if (!("type" in result)) result.type = "object";
+  if (!("type" in result) && !("oneOf" in result)) result.type = "object";
   return result;
 }
 
