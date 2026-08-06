@@ -259,6 +259,21 @@ export function createStreamConverter(
     const parsed = jsonParse(trimmed);
     if (!parsed) return [];
 
+    // Zed wraps failures in {"status": {"failed": {...}}} — surface the
+    // upstream error as content so clients aren't left with an empty stream.
+    const failed = (parsed.status as Record<string, unknown> | undefined)
+      ?.failed as Record<string, unknown> | undefined;
+    if (failed) {
+      const code = (failed.code as string) || "upstream_error";
+      const message = (failed.message as string) || "Upstream error";
+      return [
+        makeChunk(state, {
+          content: `[zed-openai-api error] ${code}: ${message}`,
+        }),
+        makeChunk(state, {}, "stop"),
+      ];
+    }
+
     // Zed wraps events in {"event": {...}}
     const event = (
       typeof parsed.event === "object" && parsed.event !== null

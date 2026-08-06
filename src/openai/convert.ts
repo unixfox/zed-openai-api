@@ -369,11 +369,88 @@ function chatToGeminiRequest(
       functionDeclarations: req.tools.map((t) => ({
         name: t.function.name,
         description: t.function.description || "",
-        parameters: t.function.parameters || {},
+        parameters: sanitizeGeminiSchema(t.function.parameters) || {},
       })),
     }];
   }
 
+  return result;
+}
+
+// Gemini rejects non-standard JSON Schema keywords that MCP tool schemas
+// commonly include ($schema, $id, const, enumTitles, patternProperties, ...).
+// Strip them recursively so upstream doesn't return a 400 for the whole batch.
+const GEMINI_SCHEMA_KEYWORDS = new Set([
+  "type",
+  "enum",
+  "nullable",
+  "format",
+  "description",
+  "properties",
+  "required",
+  "items",
+  "additionalProperties",
+  "minItems",
+  "maxItems",
+  "uniqueItems",
+  "minLength",
+  "maxLength",
+  "pattern",
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "default",
+  "oneOf",
+  "anyOf",
+  "allOf",
+]);
+
+function sanitizeGeminiSchema(
+  node: unknown,
+): Record<string, unknown> | undefined {
+  if (typeof node !== "object" || node === null || Array.isArray(node)) {
+    return { type: "object" };
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (!GEMINI_SCHEMA_KEYWORDS.has(key)) {
+      if (
+        key === "$schema" || key === "$id" || key === "const" ||
+        key === "enumTitles" || key === "patternProperties" ||
+        key.startsWith("$")
+      ) {
+        continue;
+      }
+      if (key === "title") continue;
+      continue;
+    }
+
+    if (key === "properties") {
+      const props: Record<string, unknown> = {};
+      for (
+        const [propName, propSchema] of Object.entries(
+          value as Record<string, unknown>,
+        )
+      ) {
+        props[propName] = sanitizeGeminiSchema(propSchema);
+      }
+      result.properties = props;
+    } else if (key === "items") {
+      result.items = sanitizeGeminiSchema(value);
+    } else if (key === "oneOf" || key === "anyOf" || key === "allOf") {
+      if (Array.isArray(value)) {
+        // Gemini only accepts oneOf alongside other keys; anyOf/allOf are
+        // unsupported ("must be the only field set" / unknown). Rewrite them.
+        result.oneOf = value.map((v) => sanitizeGeminiSchema(v));
+      }
+    } else {
+      result[key] = value;
+    }
+  }
+
+  if (!("type" in result)) result.type = "object";
   return result;
 }
 
