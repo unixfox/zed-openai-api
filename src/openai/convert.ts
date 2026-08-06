@@ -70,25 +70,43 @@ function jsonParse(s: string): Record<string, unknown> | null {
 // replayed functionCall parts. It has no OpenAI equivalent, and it's too long
 // to embed in the tool-call id (LobeHub stores tool_call_id in Postgres, which
 // has a btree limit ~2.7KB). Instead: clients echo a SHORT id back, and we map
-// id → signature in a bounded in-memory store across requests.
+// id → signature in a bounded in-memory store across requests. Entries expire
+// after THOUGHT_STORE_TTL_MS; keep it generous so long-running chats that
+// replay old tool-call turns still recover their signatures.
 const THOUGHT_STORE_MAX = 1000;
-const thoughtSignatureById = new Map<string, string>();
+const THOUGHT_STORE_TTL_MS = 24 * 60 * 60 * 1000;
+const thoughtSignatureById = new Map<string, { sig: string; ts: number }>();
+
+function sweepThoughtStore(): void {
+  const now = Date.now();
+  for (const [id, entry] of thoughtSignatureById) {
+    if (now - entry.ts > THOUGHT_STORE_TTL_MS) thoughtSignatureById.delete(id);
+  }
+}
 
 export function makeThoughtToolCallId(thoughtSignature?: string): string {
   const id = `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 32)}`;
   if (thoughtSignature) {
+    sweepThoughtStore();
     if (thoughtSignatureById.size >= THOUGHT_STORE_MAX) {
       const oldest = thoughtSignatureById.keys().next().value;
       if (oldest) thoughtSignatureById.delete(oldest);
     }
-    thoughtSignatureById.set(id, thoughtSignature);
+    thoughtSignatureById.set(id, { sig: thoughtSignature, ts: Date.now() });
   }
   return id;
 }
 
 export function thoughtSignatureFromId(id: string | undefined): string | null {
   if (!id) return null;
-  return thoughtSignatureById.get(id) ?? null;
+  const entry = thoughtSignatureById.get(id);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > THOUGHT_STORE_TTL_MS) {
+    thoughtSignatureById.delete(id);
+    return null;
+  }
+  entry.ts = Date.now(); // touch on use so active conversations don't expire
+  return entry.sig;
 }
 
 function toolResponseName(
