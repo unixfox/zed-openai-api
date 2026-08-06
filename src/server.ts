@@ -7,6 +7,11 @@ import {
   type ZedModel,
 } from "@lib/zed";
 import { buildProviderRequest, createStreamConverter } from "@lib/openai";
+import {
+  chatCompletionToResponsesResponse,
+  createResponsesStreamConverter,
+  responsesRequestToChatRequest,
+} from "./openai/responses.ts";
 import { createAnthropicStreamConverter } from "@lib/anthropic";
 
 // --- Auth middleware ---
@@ -144,6 +149,154 @@ export async function handleChatCompletions(
 
   if (!stream) return collectNonStreamingResponse(response, model);
   return streamResponse(response, model);
+}
+
+// --- OpenAI Responses API handler ---
+
+export async function handleResponses(
+  req: Request,
+  runtime: RuntimeState,
+): Promise<Response> {
+  const body = await req.json();
+  const modelId: string = body.model;
+  const stream: boolean = body.stream !== false;
+
+  let model: ZedModel | undefined = runtime.models.get(modelId);
+  if (!model) {
+    for (const [id, m] of runtime.models) {
+      if (id.startsWith(modelId) || m.display_name === modelId) {
+        model = m;
+        break;
+      }
+    }
+  }
+
+  if (!model) {
+    return Response.json(
+      {
+        error: {
+          message:
+            `Model '${modelId}' not found. Use GET /v1/models to list available models.`,
+          type: "invalid_request_error",
+          code: "model_not_found",
+        },
+      },
+      { status: 404 },
+    );
+  }
+
+  const providerRequest = buildProviderRequest(
+    responsesRequestToChatRequest(body, model.id) as unknown as Parameters<
+      typeof buildProviderRequest
+    >[0],
+    model,
+  );
+
+  let token = runtime.llmToken!;
+  let response = await sendCompletion(
+    token,
+    model.provider,
+    model.id,
+    providerRequest,
+  );
+
+  if (shouldRefreshToken(response)) {
+    token = await refreshToken(runtime);
+    response = await sendCompletion(
+      token,
+      model.provider,
+      model.id,
+      providerRequest,
+    );
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.error(
+      `[zed-openai-api] Responses failed (${response.status}): ${text}`,
+    );
+    return Response.json(
+      {
+        error: {
+          message: `Upstream error (${response.status}): ${text}`,
+          type: "upstream_error",
+          code: "upstream_error",
+        },
+      },
+      { status: response.status },
+    );
+  }
+
+  if (!stream) {
+    const chatResponse = await collectNonStreamingResponse(response, model);
+    const chatJson = await chatResponse.json() as Record<string, unknown>;
+    return new Response(
+      JSON.stringify(chatCompletionToResponsesResponse(chatJson, model.id)),
+      { headers: { "Content-Type": "application/json" } },
+    );
+  }
+  return streamResponses(response, model);
+}
+
+function streamResponses(response: Response, model: ZedModel): Response {
+  const toChat = createStreamConverter(model.provider, model.id);
+  const toResponses = createResponsesStreamConverter(model.id);
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+
+  const stream = new ReadableStream({
+    async pull(controller) {
+      while (true) {
+        const newlineIdx = buffer.indexOf("\n");
+        if (newlineIdx !== -1) {
+          const line = buffer.slice(0, newlineIdx).replace(/\r$/, "");
+          buffer = buffer.slice(newlineIdx + 1);
+          const chunks = toChat(line);
+          let emitted = false;
+          for (const chunk of chunks) {
+            const events = toResponses(chunk);
+            for (const event of events) {
+              controller.enqueue(encoder.encode(event));
+              emitted = true;
+            }
+          }
+          if (emitted) return;
+          continue;
+        }
+
+        const { done, value } = await reader.read();
+        if (done) {
+          if (buffer.trim()) {
+            for (const chunk of toChat(buffer)) {
+              for (const event of toResponses(chunk)) {
+                controller.enqueue(encoder.encode(event));
+              }
+            }
+          }
+          for (const event of toResponses("[DONE]")) {
+            controller.enqueue(encoder.encode(event));
+          }
+          controller.close();
+          return;
+        }
+        buffer += decoder.decode(value, { stream: true });
+      }
+    },
+    cancel() {
+      reader.cancel();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
 }
 
 // --- Anthropic Messages API handler ---

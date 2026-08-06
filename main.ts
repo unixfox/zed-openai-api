@@ -5,6 +5,7 @@ import {
   handleHealthCheck,
   handleMessages,
   handleModels,
+  handleResponses,
 } from "@lib/server";
 
 const HOST = Deno.env.get("HOST") || "::";
@@ -30,6 +31,14 @@ async function init() {
 async function handler(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
+  console.log(
+    `[zed-openai-api] ${req.method} ${path}${url.search} (model: ${
+      req.method === "POST"
+        ? ((await req.clone().json().catch(() => ({}))) as { model?: string })
+          .model ?? "-"
+        : "-"
+    })`,
+  );
 
   // CORS preflight
   if (req.method === "OPTIONS") {
@@ -57,6 +66,9 @@ async function handler(req: Request): Promise<Response> {
     }
     if (path === "/v1/chat/completions" && req.method === "POST") {
       return await handleChatCompletions(req, runtime);
+    }
+    if (path === "/v1/responses" && req.method === "POST") {
+      return await handleResponses(req, runtime);
     }
     if (path === "/v1/messages" && req.method === "POST") {
       return await handleMessages(req, runtime);
