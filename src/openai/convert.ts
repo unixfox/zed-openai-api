@@ -67,33 +67,28 @@ function jsonParse(s: string): Record<string, unknown> | null {
 }
 
 // Gemini 3.5 requires the model's `thoughtSignature` to be echoed back on
-// replayed functionCall parts. The signature has no OpenAI equivalent, so we
-// stash it in the tool-call id (clients echo the id back), then restore it.
-const THOUGHT_ID_PREFIX = "call_ts_";
+// replayed functionCall parts. It has no OpenAI equivalent, and it's too long
+// to embed in the tool-call id (LobeHub stores tool_call_id in Postgres, which
+// has a btree limit ~2.7KB). Instead: clients echo a SHORT id back, and we map
+// id → signature in a bounded in-memory store across requests.
+const THOUGHT_STORE_MAX = 1000;
+const thoughtSignatureById = new Map<string, string>();
 
 export function makeThoughtToolCallId(thoughtSignature?: string): string {
-  if (!thoughtSignature) {
-    return `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+  const id = `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 32)}`;
+  if (thoughtSignature) {
+    if (thoughtSignatureById.size >= THOUGHT_STORE_MAX) {
+      const oldest = thoughtSignatureById.keys().next().value;
+      if (oldest) thoughtSignatureById.delete(oldest);
+    }
+    thoughtSignatureById.set(id, thoughtSignature);
   }
-  const b64 = btoa(thoughtSignature)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-  return THOUGHT_ID_PREFIX + b64;
+  return id;
 }
 
 export function thoughtSignatureFromId(id: string | undefined): string | null {
-  if (!id || !id.startsWith(THOUGHT_ID_PREFIX)) return null;
-  let b64 = id.slice(THOUGHT_ID_PREFIX.length).replace(/-/g, "+").replace(
-    /_/g,
-    "/",
-  );
-  while (b64.length % 4) b64 += "=";
-  try {
-    return atob(b64);
-  } catch {
-    return null;
-  }
+  if (!id) return null;
+  return thoughtSignatureById.get(id) ?? null;
 }
 
 function toolResponseName(
