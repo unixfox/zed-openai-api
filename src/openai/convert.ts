@@ -66,6 +66,51 @@ function jsonParse(s: string): Record<string, unknown> | null {
   }
 }
 
+// Gemini 3.5 requires the model's `thoughtSignature` to be echoed back on
+// replayed functionCall parts. The signature has no OpenAI equivalent, so we
+// stash it in the tool-call id (clients echo the id back), then restore it.
+const THOUGHT_ID_PREFIX = "call_ts_";
+
+export function makeThoughtToolCallId(thoughtSignature?: string): string {
+  if (!thoughtSignature) {
+    return `call_${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+  }
+  const b64 = btoa(thoughtSignature)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+  return THOUGHT_ID_PREFIX + b64;
+}
+
+export function thoughtSignatureFromId(id: string | undefined): string | null {
+  if (!id || !id.startsWith(THOUGHT_ID_PREFIX)) return null;
+  let b64 = id.slice(THOUGHT_ID_PREFIX.length).replace(/-/g, "+").replace(
+    /_/g,
+    "/",
+  );
+  while (b64.length % 4) b64 += "=";
+  try {
+    return atob(b64);
+  } catch {
+    return null;
+  }
+}
+
+function toolResponseName(
+  toolCallId: string | undefined,
+  messages: OpenAIChatMessage[],
+): string {
+  if (!toolCallId) return "tool";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "assistant" && m.tool_calls) {
+      const found = m.tool_calls.find((tc) => tc.id === toolCallId);
+      if (found) return found.function.name;
+    }
+  }
+  return "tool";
+}
+
 // --- OpenAI Responses API format ---
 
 export function chatToResponsesApiRequest(
@@ -288,7 +333,8 @@ function chatToGeminiRequest(
   const contents: Record<string, unknown>[] = [];
   let systemInstruction: Record<string, unknown> | undefined;
 
-  for (const msg of req.messages) {
+  for (let i = 0; i < req.messages.length; i++) {
+    const msg = req.messages[i];
     if (msg.role === "system" || msg.role === "developer") {
       systemInstruction = {
         parts: [{ text: contentToString(msg.content) }],
@@ -296,43 +342,63 @@ function chatToGeminiRequest(
       continue;
     }
 
-    const role = msg.role === "assistant" ? "model" : "user";
-    const parts: Record<string, unknown>[] = [];
-
     if (msg.role === "assistant" && msg.tool_calls) {
       const text = contentToString(msg.content);
+      const parts: Record<string, unknown>[] = [];
       if (text) parts.push({ text });
       for (const tc of msg.tool_calls) {
-        parts.push({
+        const fnName = tc.function.name;
+        const fnPart: Record<string, unknown> = {
           functionCall: {
-            name: tc.function.name,
+            name: fnName,
             args: jsonParse(tc.function.arguments) || {},
+          },
+        };
+        const sig = thoughtSignatureFromId(tc.id);
+        if (sig) fnPart.thoughtSignature = sig;
+        parts.push(fnPart);
+      }
+      contents.push({ role: "model", parts });
+      continue;
+    }
+
+    if (msg.role === "tool") {
+      // Gemini requires all function responses of a turn in the SAME content
+      // block, so coalesce consecutive tool messages into one user block.
+      const parts: Record<string, unknown>[] = [];
+      let idx: number;
+      for (idx = i; idx < req.messages.length; idx++) {
+        const m = req.messages[idx];
+        if (m.role !== "tool") break;
+        const fnName = toolResponseName(m.tool_call_id, req.messages);
+        parts.push({
+          functionResponse: {
+            name: fnName,
+            response: { result: contentToString(m.content) },
           },
         });
       }
-    } else if (msg.role === "tool") {
-      parts.push({
-        functionResponse: {
-          name: "tool",
-          response: { result: contentToString(msg.content) },
-        },
-      });
-    } else {
-      const content = msg.content;
-      if (typeof content === "string") {
-        parts.push({ text: content });
-      } else if (Array.isArray(content)) {
-        for (const part of content) {
-          if (part.type === "text" && part.text) {
-            parts.push({ text: part.text });
-          } else if (part.type === "image_url" && part.image_url?.url) {
-            const url = part.image_url.url;
-            const match = url.match(/^data:([\w/+-]+);base64,(.+)$/);
-            if (match) {
-              parts.push({
-                inlineData: { mimeType: match[1], data: match[2] },
-              });
-            }
+      contents.push({ role: "user", parts });
+      i = idx - 1;
+      continue;
+    }
+
+    const role = msg.role === "assistant" ? "model" : "user";
+    const parts: Record<string, unknown>[] = [];
+    const content = msg.content;
+    if (typeof content === "string") {
+      parts.push({ text: content });
+    } else if (Array.isArray(content)) {
+      for (const part of content) {
+        if (part.type === "text" && part.text) {
+          parts.push({ text: part.text });
+        } else if (part.type === "image_url" && part.image_url?.url) {
+          const url = part.image_url.url;
+          const match = url.match(/^data:([\w/+-]+);base64,(.+)$/);
+          if (match) {
+            parts.push({
+              inlineData: { mimeType: match[1], data: match[2] },
+            });
           }
         }
       }

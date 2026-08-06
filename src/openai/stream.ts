@@ -1,4 +1,4 @@
-// Converts Zed NDJSON stream events → OpenAI Chat Completions SSE chunks
+import { makeThoughtToolCallId } from "./convert.ts";
 
 interface StreamState {
   id: string;
@@ -170,11 +170,12 @@ function convertGeminiEvent(
       if (part.functionCall) {
         const fc = part.functionCall as Record<string, unknown>;
         const idx = state.currentToolIndex++;
+        const sig = part.thoughtSignature as string | undefined;
         chunks.push(
           makeChunk(state, {
             tool_calls: [{
               index: idx,
-              id: `call_${crypto.randomUUID().slice(0, 8)}`,
+              id: makeThoughtToolCallId(sig),
               type: "function",
               function: {
                 name: fc.name as string,
