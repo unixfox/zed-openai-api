@@ -48,7 +48,9 @@ function parseSecretToolOutput(output: string): ZedCredentials | null {
     : null;
 }
 
-async function readCredentialsFromSecretTool(): Promise<ZedCredentials | null> {
+export async function readCredentialsFromSecretTool(): Promise<
+  ZedCredentials | null
+> {
   try {
     const cmd = new Deno.Command("secret-tool", {
       args: ["search", "--all", "--unlock", "url", "https://zed.dev"],

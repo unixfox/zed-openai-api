@@ -57,6 +57,30 @@ The server needs your Zed credentials. Two methods, checked in order:
    secret-tool search --all --unlock url https://zed.dev
    ```
 
+#### Headless server (no Zed desktop)
+
+Zed's access token is **long-lived** — there is no refresh flow; Zed only
+re-authenticates when the token is actually invalidated (e.g. you sign out).
+So you extract it **once** on a machine where Zed desktop is signed in, then
+drop the values into your server's environment.
+
+On your local (Zed desktop) machine:
+
+```bash
+# Print ZED_USER_ID / ZED_ACCESS_TOKEN, ready to paste into the server's .env
+./scripts/extract-credentials.sh
+
+# ...or write them straight into a local .env
+./scripts/extract-credentials.sh --env-file
+
+# ...or emit `export ...` lines
+./scripts/extract-credentials.sh --export
+```
+
+Copy the two values to the server and set them as `ZED_USER_ID` /
+`ZED_ACCESS_TOKEN`. They keep working until you sign out of Zed on the machine
+you extracted them from — no re-passing per session.
+
 ### API key
 
 Protect the server with an API key:

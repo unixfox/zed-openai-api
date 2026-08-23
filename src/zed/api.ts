@@ -29,6 +29,16 @@ function buildAuth(creds: ZedCredentials): string {
   return `${creds.userId} ${creds.accessToken}`;
 }
 
+/** Thrown when the Zed *access token* (not the LLM token) is rejected. */
+export class ZedAuthError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ZedAuthError";
+    this.status = status;
+  }
+}
+
 export async function createLlmToken(
   creds: ZedCredentials,
   systemId: string,
@@ -45,7 +55,13 @@ export async function createLlmToken(
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Failed to create LLM token (${res.status}): ${text}`);
+    const message = `Failed to create LLM token (${res.status}): ${text}`;
+    // 401/403 mean the access token itself is stale — signal the caller so it
+    // can reload fresh credentials from the keyring and retry.
+    if (res.status === 401 || res.status === 403) {
+      throw new ZedAuthError(res.status, message);
+    }
+    throw new Error(message);
   }
   const data = await res.json();
   return data.token;
